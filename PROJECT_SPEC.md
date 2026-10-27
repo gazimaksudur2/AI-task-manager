@@ -152,3 +152,34 @@ Clarifications must preserve the pending intent without executing it; after the 
 - `python -m streamlit run app.py` starts a placeholder UI without an API key.
 - `.env`, `data/` contents, `.venv/` and caches are excluded by `.gitignore`.
 - No actual task operations or model calls take place in Stage 1.
+
+## Implementation Progress
+
+### Stage 1 — Completed
+- Project structure
+- Environment configuration
+- Placeholder Streamlit interface
+- Git ignore configuration
+- Initial tests and documentation
+
+### Stage 2 — Implemented, Pending Full Local Verification
+- SQLite persistent tasks
+- Database-generated task identifiers
+- Pydantic task validation
+- CRUD and filtered listing
+- Local ChromaDB semantic index
+- SQLite-to-Chroma synchronization queue
+- Index reconciliation
+- Data-layer automated tests
+
+Stage 2 includes the semantic-index work that was
+originally scheduled for Stage 3.
+
+### Remaining Safety Work
+- Resolve natural-language task targets
+- Require clarification for ambiguous mutations
+- Validate all operations before batch execution
+- Implement atomic multi-action database transactions
+- Coordinate index updates across concurrent workers
+- Parse relative dates using Asia/Dhaka current date
+- Produce service-confirmed agent responses

@@ -73,3 +73,71 @@ The last command lists ignored local paths; actual database/vector files should 
 ## Stage 1 limitations
 
 `task_manager/models.py`, `database.py`, `task_service.py`, `vector_store.py`, `agent.py` and `graph.py` are intentionally documentation-only placeholders. No DB or index is created, and the chat input is disabled. This avoids mixing several learning stages.
+
+
+
+## Stage 2 — Data Layer
+
+Implemented:
+- SQLite task persistence with AUTOINCREMENT IDs
+- Pydantic validation of task fields
+- Create, read, update, complete and delete operations
+- Status and priority filtering
+- ISO due dates and Asia/Dhaka timestamps
+- Persistent ChromaDB semantic search
+- Authoritative task retrieval from SQLite
+- Durable index synchronization queue
+- Full index reconciliation
+- Offline automated tests using temporary directories
+
+### Run tests
+
+```bash
+python -m pytest -q
+```
+
+### Run the data layer demo
+
+```bash
+python demo_data_layer.py
+```
+
+### Persistence locations
+
+- SQLite: `data/tasks.sqlite3`
+- ChromaDB: `data/chroma/`
+
+### Important limitations
+
+The current stage does not provide:
+- LLM-powered task interpretation
+- LangGraph agent execution
+- Ambiguous task resolution
+- Atomic multi-action AI batches
+- Relative-date interpretation
+- Full task management UI
+- Multi-worker synchronization guarantees
+
+These belong to later stages.
+
+### Index recovery
+
+The database is authoritative. Each SQLite mutation also
+queues an index operation in the same transaction.
+
+If a Chroma update fails, the SQLite mutation stays committed
+and an IndexSyncError is raised.
+
+Run:
+
+```python
+service.sync_pending()
+```
+
+To perform a complete index repair, run:
+
+```python
+service.reconcile_index()
+```
+
+Never delete the SQLite database to repair Chroma.
