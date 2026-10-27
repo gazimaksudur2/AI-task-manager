@@ -1,0 +1,28 @@
+# API credentials and private configuration
+.env
+.env.*
+!.env.example
+
+# Local persistence; keep only an empty directory marker
+/data/**
+!/data/.gitkeep
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
