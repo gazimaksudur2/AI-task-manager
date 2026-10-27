@@ -91,6 +91,7 @@ def build_chat_model():
 
     if settings.llm_provider == "google":
         from langchain_google_genai import ChatGoogleGenerativeAI
+
         return ChatGoogleGenerativeAI(
             model=model,
             api_key=settings.google_api_key.get_secret_value(),
@@ -140,7 +141,7 @@ class LLMPlanner:
                 ActionPlan,
                 method="json_schema",
             )
-        else:
+        elif settings.llm_provider == "google":
             self.structured_model = model.with_structured_output(
                 ActionPlan,
                 method="json_schema",

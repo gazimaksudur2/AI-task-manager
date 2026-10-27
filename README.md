@@ -169,3 +169,61 @@ The graph preserves clarification context within one running
 Python session. Persistent task storage remains in SQLite.
 
 The existing Streamlit application is still a placeholder.
+
+
+
+## Stage 4 — Streamlit User Interface
+
+The application now provides a single-page interface with:
+
+- Natural-language chat powered by LangGraph
+- Conversation history preserved during Streamlit reruns
+- Session-scoped clarification context
+- Task cards with IDs, titles, statuses, priorities and due dates
+- Expandable task descriptions
+- Status and priority filters
+- Task list refresh
+- Clear-chat option
+- Clear errors and clarification messages
+- Persistent SQLite task records
+- ChromaDB semantic search
+
+### Run the application
+
+Activate the Python 3.12 virtual environment.
+
+```bash
+streamlit run app.py
+```
+
+Open http://localhost:8501.
+
+### How persistence works
+
+Tasks remain in SQLite across application restarts.
+
+Streamlit session state preserves chat messages and the
+LangGraph thread during browser-session reruns.
+
+A browser reload or server restart may reset conversation
+history, but it does not delete saved tasks.
+
+### Architecture
+
+Streamlit -> LangGraph -> TaskService -> SQLite
+
+ChromaDB is used for semantic task retrieval and is
+synchronized with SQLite.
+
+The UI contains no independent task mutation logic.
+
+### Limitations
+
+This is currently a single-user local application.
+
+It does not include authentication, authorization,
+multi-user data isolation or production deployment
+security controls.
+
+Do not expose the development server publicly.
+```
