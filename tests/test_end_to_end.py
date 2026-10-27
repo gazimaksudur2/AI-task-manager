@@ -219,3 +219,187 @@ def test_rebuild_index_from_sqlite_repairs_missing_entries(service):
     assert service.vector_store.collection.get(ids=[task.id])["ids"] == []
     service.reconcile_index()
     assert service.search_tasks("demonstration")[0].task.id == task.id
+
+
+def test_meeting_datetime_preserves_time_without_database_migration(service):
+    """Regression: model may incorrectly put 'tomorrow at 4 pm' in due_date."""
+    _, result = start(service, [{
+        "operation": "CREATE",
+        "title": "Meeting with SpaceX CEO",
+        "due_date": "tomorrow at 4 pm",
+    }], request="I have a meeting tomorrow at 4 pm with CEO of SpaceX",
+       thread="meeting-datetime")
+    assert "Created" in result["response"]
+    created = service.all_tasks()[0]
+    assert created.due_date == dhaka_today() + timedelta(days=1)
+    assert created.description == "Time: 4:00 PM"
+    assert "Time: 4:00 PM" in service.vector_store.collection.get(
+        ids=[created.id], include=["documents"]
+    )["documents"][0]
+
+
+def test_meeting_time_already_in_description_is_not_duplicated(service):
+    _, result = start(service, [{
+        "operation": "CREATE",
+        "title": "Meeting with SpaceX CEO",
+        "due_date": "tomorrow",
+        "description": "Time: 4:00 PM",
+    }], thread="meeting-time-separate")
+    assert "Created" in result["response"]
+    assert service.all_tasks()[0].description == "Time: 4:00 PM"
+
+
+def test_update_meeting_time_preserves_existing_description(service):
+    initial = service.create_task(
+        title="Client meeting", description="Discuss launch timeline",
+    )
+    _, result = start(service, [{
+        "operation": "UPDATE",
+        "target_id": initial.id,
+        "due_date": "next Friday at 16:00",
+    }], thread="meeting-update")
+    assert "Updated" in result["response"]
+    updated = service.get_task(initial.id)
+    assert updated.description == "Discuss launch timeline\nTime: 4:00 PM"
+    assert updated.due_date is not None
+
+
+def test_ambiguous_meeting_update_retains_time_through_clarification(service):
+    first = service.create_task(title="Team meeting", description="Original one")
+    second = service.create_task(title="Team meeting", description="Original two")
+    graph, result = start(service, [{
+        "operation": "UPDATE",
+        "target_title": "Team meeting",
+        "due_date": "tomorrow at 4 pm",
+    }], thread="meeting-ambiguous")
+    assert "Which task" in result["response"]
+    assert service.get_task(first.id).due_date is None
+    assert service.get_task(second.id).due_date is None
+    selected = answer(
+        graph, first.id, "meeting-ambiguous", "meeting-ambiguous-message-2",
+    )
+    assert "Updated" in selected["response"]
+    assert service.get_task(first.id).description == "Original one\nTime: 4:00 PM"
+    assert service.get_task(second.id).description == "Original two"
+
+
+class RequestPlanner:
+    """In-memory LLM replacement for testing instructions over one thread."""
+
+    def __init__(self, mapping):
+        self.mapping = mapping
+        self.calls = []
+
+    def __call__(self, request):
+        self.calls.append(request)
+        return ActionPlan.model_validate({"actions": self.mapping[request]})
+
+
+def test_pending_clarification_does_not_lock_all_future_commands(service):
+    demo = service.create_task(title="Prepare my demo")
+    meeting = service.create_task(title="Meeting with SpaceX CEO")
+    initial_request = "Move the demo task to In progress and mark the weekly report Done."
+    planner = RequestPlanner({
+        initial_request: [
+            {"operation": "CHANGE_STATUS", "target_title": "demo task", "status": "In progress"},
+            {"operation": "COMPLETE", "target_title": "weekly report"},
+        ],
+    })
+    graph = build_agent_graph(service, planner=planner)
+    thread = "no-stuck-chat"
+
+    result = answer(graph, initial_request, thread, "message-1")
+    # Unique partial title for 'demo task' resolves, but missing weekly report
+    # blocks the WHOLE mutation batch, including the resolved first action.
+    assert result["pending_clarification"] is not None
+    assert "Action 2" in result["response"]
+    assert service.get_task(demo.id).status.value == "Todo"
+
+    result = answer(graph, "show all tasks", thread, "message-2")
+    assert result.get("pending_clarification") is None
+    assert "Task list (2)" in result["response"]
+    assert demo.title in result["response"]
+    assert meeting.title in result["response"]
+    assert planner.calls == [initial_request]  # simple LIST needs no LLM
+    assert service.get_task(demo.id).status.value == "Todo"
+
+
+def test_pending_ambiguity_can_be_canceled_without_changes(service):
+    a = service.create_task(title="Weekly report")
+    b = service.create_task(title="Weekly report")
+    planner = RequestPlanner({"complete the weekly report": [
+        {"operation": "COMPLETE", "target_title": "weekly report"},
+    ]})
+    graph = build_agent_graph(service, planner=planner)
+    thread = "cancel-stale-request"
+    initial = answer(graph, "complete the weekly report", thread, "message-1")
+    assert initial["pending_clarification"]
+
+    result = answer(graph, "cancel", thread, "message-2")
+    assert "Canceled" in result["response"]
+    assert result.get("pending_clarification") is None
+    assert service.get_task(a.id).status.value == "Todo"
+    assert service.get_task(b.id).status.value == "Todo"
+
+    followup = answer(graph, "find all", thread, "message-3")
+    assert "Task list (2)" in followup["response"]
+
+
+def test_new_mutation_command_replaces_previous_pending_batch(service):
+    task = service.create_task(title="Prepare my demo")
+    service.create_task(title="Meeting with SpaceX CEO")
+    initial_request = "Complete weekly report"
+    next_request = "Move the task that has demo in the title to In progress"
+    planner = RequestPlanner({
+        initial_request: [{"operation": "COMPLETE", "target_title": "weekly report"}],
+        next_request: [{
+            "operation": "CHANGE_STATUS", "target_title": "task that has demo in its title",
+            "status": "In progress",
+        }],
+    })
+    graph = build_agent_graph(service, planner=planner)
+    thread = "new-mutation"
+    first = answer(graph, initial_request, thread, "message-1")
+    assert first["pending_clarification"]
+
+    result = answer(graph, next_request, thread, "message-2")
+    assert not result.get("pending_clarification")
+    assert "Changed status" in result["response"]
+    assert service.get_task(task.id).status.value == "In progress"
+    assert planner.calls == [initial_request, next_request]
+
+
+def test_partial_title_requiring_confirmation_when_not_unique(service):
+    first = service.create_task(title="Prepare my demo")
+    second = service.create_task(title="Review the demo")
+    planner = RequestPlanner({"complete the demo task": [{
+        "operation": "COMPLETE", "target_title": "demo task",
+    }]})
+    graph = build_agent_graph(service, planner=planner)
+    thread = "fragment-ambiguity"
+    initial = answer(graph, "complete the demo task", thread, "message-1")
+    assert initial["pending_clarification"]
+    assert len(initial["pending_clarification"]["candidates"]) == 2
+    assert service.get_task(first.id).status.value == "Todo"
+    assert service.get_task(second.id).status.value == "Todo"
+
+    result = answer(graph, "2", thread, "message-2")
+    assert result["pending_clarification"] is None
+    assert service.get_task(first.id).status.value == "Todo"
+    assert service.get_task(second.id).status.value == "Done"
+
+
+def test_date_clarification_can_be_interrupted_by_a_read_request(service):
+    planner = RequestPlanner({"create a task sometime next month": [
+        {"operation": "CREATE", "title": "Submit report", "due_date": "next month"},
+    ]})
+    graph = build_agent_graph(service, planner=planner)
+    thread = "date-pending-new-command"
+    result = answer(graph, "create a task sometime next month", thread, "message-1")
+    assert result["pending_clarification"]
+    assert service.count_tasks() == 0
+
+    result = answer(graph, "show all tasks", thread, "message-2")
+    assert result["pending_clarification"] is None
+    assert "No tasks found" in result["response"]
+    assert service.count_tasks() == 0

@@ -23,8 +23,12 @@ Rules:
 - Never execute tools, SQL or code.
 - Never invent task IDs. Include target_id only when the
   user explicitly supplies an ID.
-- Use target_title for a task's existing name.
-- Use target_description for a vague reference.
+- Use target_title for a task's existing name or distinctive title words.
+  Example: "demo task" or "task with demo in its title" can be
+  target_title="demo". Do not invent an exact title not given by the user.
+- Use target_description for a vague semantic reference with no title words.
+- Never invent a matching task or silently drop an action if a task may
+  not exist. The resolver will ask for clarification.
 - For UPDATE, title means the NEW title.
 - CREATE requires title.
 - DELETE and other mutations require a target.

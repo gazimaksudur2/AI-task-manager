@@ -737,9 +737,15 @@ def main() -> None:
 
         if st.session_state.awaiting_clarification:
             st.warning(
-                "Clarification needed — reply to the "
-                "last assistant question with an option "
-                "number, task ID, or requested date."
+                "Clarification needed — reply with an option number, "
+                "task ID, or date. You can also send a new instruction."
+            )
+            st.button(
+                "Cancel pending request",
+                key="cancel_pending_request",
+                disabled=graph is None,
+                on_click=queue_prompt,
+                args=("cancel",),
             )
 
         with st.container(

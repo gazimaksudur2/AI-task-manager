@@ -13,6 +13,10 @@ from langgraph.graph import END, START, StateGraph
 from .agent import LLMPlanner
 from .agent_models import ActionPlan, Operation
 from .models import Status
+from .intent_resolution import (
+    is_cancel_request, is_new_instruction, is_simple_list_request,
+    partial_title_matches,
+)
 from .task_service import BatchSyncError, TaskService
 
 import logging
@@ -311,6 +315,27 @@ def build_agent_graph(
 
         pending = state.get("pending_clarification")
 
+        # The user may cancel or issue an entirely new instruction instead of
+        # answering the previous question. Do not trap the chat in clarify.
+        if pending and is_cancel_request(request):
+            return {
+                "plan": None,
+                "pending_clarification": None,
+                "resolved_targets": {},
+                "target_versions": {},
+                "validation_errors": [],
+                "execution_results": [{
+                    "kind": "notice",
+                    "message": "Canceled the previous request. No task changes were made.",
+                }],
+                "route": "respond",
+                "response": "",
+            }
+
+        if pending and is_new_instruction(request):
+            # The following fresh plan replaces all old targets and state.
+            pending = None
+
         if pending:
             plan = deepcopy(state["plan"])
             index = pending["index"]
@@ -364,8 +389,15 @@ def build_agent_graph(
             }
         
         try:
-            proposed = planner(request)
-            plan = ActionPlan.model_validate(proposed)
+            # Unfiltered task-list commands are deterministic and do not
+            # require an LLM call, even after a pending clarification.
+            if is_simple_list_request(request):
+                plan = ActionPlan.model_validate({
+                    "actions": [{"operation": "LIST"}],
+                })
+            else:
+                proposed = planner(request)
+                plan = ActionPlan.model_validate(proposed)
 
         except Exception as exc:
             logger.exception(
@@ -463,10 +495,24 @@ def build_agent_graph(
                         ]
                         reason = "Multiple tasks have this title."
                     else:
-                        reason = (
-                            "No exact title found. "
-                            "These are semantic candidates:"
+                        # A literal, unique title fragment is safe to resolve
+                        # automatically; ambiguous fragments never mutate.
+                        fragments = partial_title_matches(
+                            action.target_title, service.all_tasks()
                         )
+                        if len(fragments) == 1:
+                            task = fragments[0]
+                        elif len(fragments) > 1:
+                            candidates = [
+                                {"id": t.id, "title": t.title}
+                                for t in fragments[:5]
+                            ]
+                            reason = "Several task titles match that phrase."
+                        else:
+                            reason = (
+                                f"No task title matches '{action.target_title}'. "
+                                "The following semantic suggestions may be unrelated."
+                            )
 
                 if task is None and not candidates:
                     # No semantic fallback for a supplied nonexistent ID.
@@ -758,7 +804,10 @@ def build_agent_graph(
         for result in state.get("execution_results") or []:
             kind = result["kind"]
 
-            if kind == "mutation":
+            if kind == "notice":
+                messages.append(result["message"])
+
+            elif kind == "mutation":
                 task = result["task"]
                 operation = result["operation"]
 
