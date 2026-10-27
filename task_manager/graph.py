@@ -127,6 +127,62 @@ def resolve_due_date(
     )
 
 
+def split_due_date_time(expression: str) -> tuple[str, str | None]:
+    """Separate a simple clock time from a supported due-date expression.
+
+    The database deliberately has no time column: a clock time is saved
+    as human-readable description text, not silently discarded.
+    """
+    text = expression.strip()
+    match = re.fullmatch(
+        r"(?P<day>.+?)\s+(?:at\s+)?"
+        r"(?P<clock>(?:0?[1-9]|1[0-2])(?::[0-5]\d)?\s*[ap]\.?m\.?"
+        r"|(?:[01]?\d|2[0-3]):[0-5]\d|noon|midnight)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return text, None
+
+    raw_time = match.group("clock").lower().strip()
+    if raw_time in {"noon", "midnight"}:
+        hour = 12 if raw_time == "noon" else 0
+        minute = 0
+    else:
+        twelve_hour = re.fullmatch(
+            r"(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?",
+            raw_time,
+        )
+        if twelve_hour:
+            hour = int(twelve_hour.group(1)) % 12
+            if twelve_hour.group(3) == "p":
+                hour += 12
+            minute = int(twelve_hour.group(2) or 0)
+        else:
+            hour_text, minute_text = raw_time.split(":")
+            hour, minute = int(hour_text), int(minute_text)
+
+    period = "AM" if hour < 12 else "PM"
+    display_hour = (hour % 12) or 12
+    return match.group("day"), f"{display_hour}:{minute:02d} {period}"
+
+
+def append_meeting_time(description: str | None, clock: str) -> str:
+    """Keep existing notes and avoid adding an already-mentioned time."""
+    current = (description or "").strip()
+    hh, rest = clock.split(":", 1)
+    mm, meridiem = rest.split(" ", 1)
+    # Accept both '4 pm' and '4:00 PM' as existing descriptions.
+    time_pattern = (
+        rf"(?<!\d){int(hh)}(?::{mm})?\s*"
+        rf"{meridiem[0]}\.?m\.?(?![a-z])"
+    )
+    if re.search(time_pattern, current, flags=re.IGNORECASE):
+        return current
+    note = f"Time: {clock}"
+    return f"{current}\n{note}" if current else note
+
+
 ORDINALS = {
     "first": 0,
     "second": 1,
@@ -361,35 +417,6 @@ def build_agent_graph(
             for index, action in enumerate(plan.actions):
                 key = str(index)
 
-                if action.due_date is not None:
-                    try:
-                        resolved_date = resolve_due_date(
-                            action.due_date
-                        )
-                    except DateResolutionError:
-                        pending = {
-                            "kind": "date",
-                            "index": index,
-                            "candidates": [],
-                            "prompt": (
-                                f"Action {index + 1}: "
-                                f"I cannot confidently interpret "
-                                f"'{action.due_date}'. "
-                                "Please provide YYYY-MM-DD."
-                            ),
-                        }
-                        return {
-                            "pending_clarification": pending,
-                            "plan": plan_data,
-                            "resolved_targets": targets,
-                            "target_versions": versions,
-                            "route": "clarify",
-                        }
-
-                    plan_data["actions"][index][
-                        "due_date"
-                    ] = resolved_date
-
                 if action.operation not in TARGET_MUTATIONS:
                     continue
 
@@ -490,6 +517,53 @@ def build_agent_graph(
                     "pending_clarification": pending,
                     "route": "clarify",
                 }
+
+            # Only after all mutation targets are resolved do we normalize
+            # dates and preserve optional clock times. This avoids losing
+            # time details while waiting for an ambiguous-target reply.
+            for index, action in enumerate(plan.actions):
+                if action.due_date is None:
+                    continue
+
+                date_text, clock = split_due_date_time(action.due_date)
+                try:
+                    resolved_date = resolve_due_date(date_text)
+                except DateResolutionError:
+                    pending = {
+                        "kind": "date",
+                        "index": index,
+                        "candidates": [],
+                        "prompt": (
+                            f"Action {index + 1}: "
+                            f"I cannot confidently interpret "
+                            f"'{action.due_date}'. "
+                            "Please provide YYYY-MM-DD."
+                        ),
+                    }
+                    return {
+                        "pending_clarification": pending,
+                        "plan": plan_data,
+                        "resolved_targets": targets,
+                        "target_versions": versions,
+                        "route": "clarify",
+                    }
+
+                plan_data["actions"][index]["due_date"] = resolved_date
+
+                if clock is not None:
+                    if action.clear_description:
+                        raise ValueError(
+                            "Cannot clear the description and save a meeting "
+                            "time in it in the same action."
+                        )
+                    original_description = action.description
+                    if (action.operation == Operation.UPDATE
+                            and original_description is None):
+                        target = service.get_task(targets[str(index)])
+                        original_description = target.description
+                    plan_data["actions"][index]["description"] = (
+                        append_meeting_time(original_description, clock)
+                    )
 
             return {
                 "plan": plan_data,

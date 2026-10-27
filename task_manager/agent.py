@@ -35,9 +35,13 @@ Rules:
 - "Unfinished" means unfinished=true.
 - Priority must be Low, Medium or High.
 - Status must be Todo, In progress or Done.
-- Preserve relative date phrases in due_date, such as
-  "tomorrow" or "next Friday". Python will resolve them.
-- Do not guess an unsupported date.
+- due_date accepts ONLY a calendar date or a supported date phrase,
+  such as "2026-10-28", "tomorrow", or "next Friday".
+  Python will resolve relative dates. NEVER put a clock time in due_date.
+- If the user specifies a clock time, keep it in description (e.g.
+  "Time: 4:00 PM") while keeping due_date limited to the DATE.
+  Preserve other description details; never discard the meeting time.
+- Do not invent a timezone or guess an unsupported date.
 - Clear a description only with clear_description=true.
 - Clear a due date only with clear_due_date=true.
 - Split multiple user requests into multiple actions.
@@ -60,6 +64,18 @@ Example response for creating a task:
       "title": "Finish research proposal",
       "priority": "High",
       "due_date": "tomorrow"
+    }
+  ]
+}
+
+Example: "I have a meeting tomorrow at 4 pm with the CEO of SpaceX":
+{
+  "actions": [
+    {
+      "operation": "CREATE",
+      "title": "Meeting with SpaceX CEO",
+      "due_date": "tomorrow",
+      "description": "Time: 4:00 PM"
     }
   ]
 }
