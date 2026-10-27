@@ -8,3 +8,6 @@ google-genai>=1.0,<2
 pydantic>=2.7,<3
 python-dotenv>=1.0,<2
 pytest>=8.0,<10
+langchain-openai>=1.0,<2
+langchain-google-genai>=4.0,<5
+langchain-anthropic>=1.0,<2

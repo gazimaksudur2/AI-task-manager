@@ -9,6 +9,16 @@ class IndexSyncError(RuntimeError):
     """SQLite committed, but Chroma could not be fully synchronized."""
 
 
+class BatchSyncError(IndexSyncError):
+    """SQLite batch committed, but Chroma synchronization failed."""
+
+    def __init__(self, results):
+        self.results = results
+        super().__init__(
+            "SQLite batch committed; Chroma synchronization pending"
+        )
+
+
 @dataclass(frozen=True)
 class TaskSearchResult:
     task: Task
@@ -204,5 +214,17 @@ class TaskService:
                     distance=candidate.distance,
                 )
             )
+
+        return results
+
+    def apply_mutations(self, mutations: list[dict]) -> list[dict]:
+        """Commit all SQLite mutations, then synchronize Chroma."""
+
+        results = self.database.apply_mutations(mutations)
+
+        try:
+            self.sync_pending()
+        except IndexSyncError as exc:
+            raise BatchSyncError(results) from exc
 
         return results

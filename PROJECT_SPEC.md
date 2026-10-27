@@ -183,3 +183,40 @@ originally scheduled for Stage 3.
 - Coordinate index updates across concurrent workers
 - Parse relative dates using Asia/Dhaka current date
 - Produce service-confirmed agent responses
+
+
+## Stage 3 — LangGraph Agent
+
+Implemented:
+- Validated structured action plans
+- Eight supported operations
+- Groq, Gemini, Claude and optional OpenAI adapters
+- LangGraph state and conditional routing
+- Exact ID / exact title / semantic candidate resolution
+- Explicit clarification for semantic mutations
+- Session-scoped clarification state
+- Deterministic Asia/Dhaka date interpretation
+- Atomic SQLite mutation batches
+- Revision checks before mutations
+- Grounded service-result responses
+- Mocked planner and offline agent tests
+
+### Execution safety
+
+The LLM cannot directly mutate tasks.
+Every action must pass Pydantic and Python validation.
+
+All mutations in one request are prevalidated before execution.
+SQLite commits them inside one transaction.
+
+Semantic retrieval never authorizes an automatic mutation.
+A candidate must be explicitly selected.
+
+SQLite remains authoritative.
+ChromaDB remains a derived semantic index.
+
+### Remaining work
+- Full Streamlit chat interface
+- Durable clarification checkpoints across application restarts
+- Multi-worker concurrency coordination
+- Operational logging and deployment hardening

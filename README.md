@@ -141,3 +141,31 @@ service.reconcile_index()
 ```
 
 Never delete the SQLite database to repair Chroma.
+
+
+## Stage 3 — AI Agent
+
+Choose the provider and model in `.env`.
+
+Supported providers:
+- groq
+- google
+- anthropic
+- openai
+
+Run agent tests:
+
+```bash
+python -m pytest tests/test_agent.py -v
+```
+
+Start the interactive CLI:
+
+```bash
+python demo_agent.py
+```
+
+The graph preserves clarification context within one running
+Python session. Persistent task storage remains in SQLite.
+
+The existing Streamlit application is still a placeholder.

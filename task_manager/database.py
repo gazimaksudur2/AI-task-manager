@@ -25,6 +25,10 @@ class TaskNotFoundError(LookupError):
     """The requested SQLite task does not exist."""
 
 
+class ConcurrentTaskChangeError(RuntimeError):
+    """A task changed since the agent resolved its target."""
+
+
 @dataclass(frozen=True)
 class PendingIndexChange:
     task_id: str
@@ -373,3 +377,245 @@ class TaskDatabase:
                     change.token,
                 ),
             )
+
+    def apply_mutations(self, mutations: list[dict]) -> list[dict]:
+        """Apply a validated batch in ONE SQLite transaction.
+
+        Each input dictionary has:
+          operation: CREATE | UPDATE | CHANGE_STATUS | COMPLETE | DELETE
+          task_id: required except for CREATE
+          fields: validated task fields
+          expected_revision: for existing tasks
+
+        The entire batch rolls back if any database operation fails.
+        """
+
+        allowed = {
+            "CREATE", "UPDATE", "CHANGE_STATUS",
+            "COMPLETE", "DELETE",
+        }
+
+        prepared = []
+
+        # First validate the complete batch without changing SQLite.
+        for item in mutations:
+            op = item.get("operation")
+
+            if op not in allowed:
+                raise ValueError(f"Unsupported mutation: {op}")
+
+            if op == "CREATE":
+                if "task_id" in item:
+                    raise ValueError(
+                        "CREATE must not provide a task ID"
+                    )
+
+                data = TaskCreate.model_validate(
+                    item.get("fields", {})
+                )
+
+                prepared.append({
+                    "operation": op,
+                    "fields": data,
+                })
+                continue
+
+            number = parse_task_id(item.get("task_id"))
+
+            revision = item.get("expected_revision")
+            if type(revision) is not int or revision < 1:
+                raise ValueError(
+                    "Existing tasks need a valid expected_revision"
+                )
+
+            fields = item.get("fields", {})
+
+            if op == "UPDATE":
+                patch = TaskUpdate.model_validate(fields)
+                changes = patch.model_dump(
+                    exclude_unset=True
+                )
+
+                if not changes:
+                    raise ValueError("UPDATE cannot be empty")
+
+                if any(
+                    changes.get(key, "provided") is None
+                    for key in ("title", "status", "priority")
+                ):
+                    raise ValueError(
+                        "Required task fields cannot be cleared"
+                    )
+
+            elif op == "CHANGE_STATUS":
+                patch = TaskUpdate.model_validate(fields)
+                changes = patch.model_dump(exclude_unset=True)
+
+                if (
+                    set(changes) != {"status"}
+                    or changes["status"] is None
+                ):
+                    raise ValueError(
+                        "CHANGE_STATUS requires only a valid status"
+                    )
+
+            elif op == "COMPLETE":
+                if fields:
+                    raise ValueError(
+                        "COMPLETE accepts no extra fields"
+                    )
+                changes = {"status": Status.DONE}
+
+            else:  # DELETE
+                if fields:
+                    raise ValueError(
+                        "DELETE accepts no extra fields"
+                    )
+                changes = {}
+
+            prepared.append({
+                "operation": op,
+                "number": number,
+                "revision": revision,
+                "changes": changes,
+            })
+
+        results = []
+
+        with self._transaction() as conn:
+            # Check ALL target records and versions before any write.
+            checked_versions = {}
+
+            for item in prepared:
+                if item["operation"] == "CREATE":
+                    continue
+
+                number = item["number"]
+
+                if number not in checked_versions:
+                    row = conn.execute(
+                        "SELECT revision FROM tasks WHERE id = ?",
+                        (number,),
+                    ).fetchone()
+
+                    if row is None:
+                        raise TaskNotFoundError(
+                            format_task_id(number)
+                        )
+
+                    checked_versions[number] = row["revision"]
+
+                if checked_versions[number] != item["revision"]:
+                    raise ConcurrentTaskChangeError(
+                        f"{format_task_id(number)} changed "
+                        "since target resolution"
+                    )
+
+            # Preflight complete: execute inside the same transaction.
+            for item in prepared:
+                op = item["operation"]
+
+                if op == "CREATE":
+                    data = item["fields"]
+                    now = self._now()
+
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO tasks
+                        (title, description, status, priority,
+                         due_date, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            data.title,
+                            data.description,
+                            data.status.value,
+                            data.priority.value,
+                            data.due_date.isoformat()
+                            if data.due_date else None,
+                            now, now,
+                        ),
+                    )
+
+                    number = cursor.lastrowid
+                    self._enqueue(conn, number, "upsert")
+
+                    row = conn.execute(
+                        "SELECT * FROM tasks WHERE id = ?",
+                        (number,),
+                    ).fetchone()
+
+                    results.append({
+                        "operation": op,
+                        "task": self._row_to_task(row),
+                    })
+                    continue
+
+                number = item["number"]
+
+                row = conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?",
+                    (number,),
+                ).fetchone()
+
+                if row is None:
+                    raise TaskNotFoundError(
+                        format_task_id(number)
+                    )
+
+                if op == "DELETE":
+                    deleted_task = self._row_to_task(row)
+
+                    conn.execute(
+                        "DELETE FROM tasks WHERE id = ?",
+                        (number,),
+                    )
+                    self._enqueue(conn, number, "delete")
+
+                    results.append({
+                        "operation": op,
+                        "task": deleted_task,
+                    })
+                    continue
+
+                changes = dict(item["changes"])
+
+                for field, value in changes.items():
+                    if isinstance(value, (Status, Priority)):
+                        changes[field] = value.value
+                    elif field == "due_date" and value is not None:
+                        changes[field] = value.isoformat()
+
+                # Only TaskUpdate schema fields are allowed.
+                assignments = ", ".join(
+                    f"{field} = ?" for field in changes
+                )
+
+                conn.execute(
+                    f"""
+                    UPDATE tasks
+                    SET {assignments},
+                        updated_at = ?,
+                        revision = revision + 1
+                    WHERE id = ?
+                    """,
+                    [
+                        *changes.values(),
+                        self._now(),
+                        number,
+                    ],
+                )
+
+                self._enqueue(conn, number, "upsert")
+
+                updated_row = conn.execute(
+                    "SELECT * FROM tasks WHERE id = ?",
+                    (number,),
+                ).fetchone()
+
+                results.append({
+                    "operation": op,
+                    "task": self._row_to_task(updated_row),
+                })
+
+        return results
