@@ -1,13 +1,14 @@
 
 """SQLite source of truth, with a durable Chroma sync queue."""
 
+import hashlib
+import json
 import sqlite3
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from .models import (
     Priority,
@@ -90,6 +91,12 @@ class TaskDatabase:
                     CHECK (operation IN ('upsert', 'delete')),
                 token INTEGER NOT NULL DEFAULT 1
             )""",
+            """CREATE TABLE IF NOT EXISTS mutation_receipts (
+                request_id TEXT PRIMARY KEY,
+                payload_hash TEXT NOT NULL,
+                results_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )""",
         )
 
         with self._transaction() as conn:
@@ -104,9 +111,7 @@ class TaskDatabase:
 
     @staticmethod
     def _now():
-        return datetime.now(
-            ZoneInfo("Asia/Dhaka")
-        ).isoformat(timespec="microseconds")
+        return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
     @staticmethod
     def _enqueue(conn, number: int, operation: str):
@@ -378,7 +383,11 @@ class TaskDatabase:
                 ),
             )
 
-    def apply_mutations(self, mutations: list[dict]) -> list[dict]:
+    def apply_mutations(
+        self,
+        mutations: list[dict],
+        request_id: str | None = None,
+    ) -> list[dict]:
         """Apply a validated batch in ONE SQLite transaction.
 
         Each input dictionary has:
@@ -394,6 +403,29 @@ class TaskDatabase:
             "CREATE", "UPDATE", "CHANGE_STATUS",
             "COMPLETE", "DELETE",
         }
+
+        if request_id is not None and (
+            not isinstance(request_id, str)
+            or not request_id.strip()
+            or len(request_id) > 128
+        ):
+            raise ValueError("request_id must be a nonempty string up to 128 characters")
+
+        # Do not include 'expected_revision' in the replay fingerprint:
+        # it may change between an initial commit and a retry.
+        fingerprint_data = [
+            {
+                "operation": item.get("operation"),
+                "task_id": item.get("task_id"),
+                "fields": item.get("fields", {}),
+            }
+            for item in mutations
+        ]
+        payload_hash = hashlib.sha256(
+            json.dumps(
+                fingerprint_data, sort_keys=True, default=str,
+            ).encode("utf-8")
+        ).hexdigest()
 
         prepared = []
 
@@ -483,6 +515,25 @@ class TaskDatabase:
         results = []
 
         with self._transaction() as conn:
+            # A repeated submission must never apply twice, even if the
+            # caller retries after a successful commit but lost its reply.
+            if request_id is not None:
+                receipt = conn.execute(
+                    "SELECT payload_hash, results_json FROM mutation_receipts "
+                    "WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                if receipt is not None:
+                    if receipt["payload_hash"] != payload_hash:
+                        raise ValueError(
+                            "This submission ID was already used for a different batch"
+                        )
+                    return [
+                        {"operation": item["operation"],
+                         "task": Task.model_validate(item["task"])}
+                        for item in json.loads(receipt["results_json"])
+                    ]
+
             # Check ALL target records and versions before any write.
             checked_versions = {}
 
@@ -617,5 +668,22 @@ class TaskDatabase:
                     "operation": op,
                     "task": self._row_to_task(updated_row),
                 })
+
+            if request_id is not None:
+                conn.execute(
+                    "INSERT INTO mutation_receipts "
+                    "(request_id, payload_hash, results_json, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        request_id,
+                        payload_hash,
+                        json.dumps([
+                            {"operation": item["operation"],
+                             "task": item["task"].model_dump(mode="json")}
+                            for item in results
+                        ]),
+                        self._now(),
+                    ),
+                )
 
         return results

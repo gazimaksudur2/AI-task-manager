@@ -14,7 +14,9 @@ def main():
     settings = get_settings()
 
     db = TaskDatabase(settings.sqlite_path)
-    index = TaskVectorStore(settings.chroma_path)
+    index = TaskVectorStore(
+        settings.chroma_path, max_distance=settings.max_semantic_distance,
+    )
     service = TaskService(db, index)
 
     # Repair stale/missing index records at application startup.
@@ -48,7 +50,7 @@ def main():
                 continue
 
             result = graph.invoke(
-                {"user_request": message},
+                {"user_request": message, "submission_id": str(uuid4())},
                 config=config,
             )
 

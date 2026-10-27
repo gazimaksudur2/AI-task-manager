@@ -1,4 +1,1 @@
-"""AI Task Manager application package.
-
-Stage 1 contains configuration and module placeholders only.
-"""
+"""AI Task Manager application: local task storage and validated LLM workflow."""

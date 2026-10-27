@@ -53,6 +53,8 @@ class TinyTestEmbeddings(EmbeddingFunction[Documents]):
             {"meeting", "call", "appointment"},
             {"groceries", "shopping", "supermarket"},
             {"project", "work", "client"},
+            {"demo", "demonstration", "presentation"},
+            {"documentation", "document", "docs"},
         )
 
         vectors = []

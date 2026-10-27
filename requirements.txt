@@ -1,5 +1,5 @@
 # Python 3.12; major-version bounds reduce accidental breaking upgrades.
-# Stage 1 installs future dependencies but does not initialize the agent/index.
+# Runtime dependencies for the Stage 4 local application and offline tests.
 streamlit>=1.35,<2
 langgraph>=1.0,<2
 chromadb>=1.0,<2

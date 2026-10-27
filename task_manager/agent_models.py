@@ -155,6 +155,15 @@ class Action(BaseModel):
         if self.due_date is not None and not self.due_date.strip():
             raise ValueError("Due date cannot be blank")
 
+        if (
+            op == Operation.UPDATE
+            and self.description is not None
+            and not self.description.strip()
+        ):
+            raise ValueError(
+                "Use clear_description=true to clear a description"
+            )
+
         if self.clear_description and self.description is not None:
             raise ValueError(
                 "Cannot set and clear description together"

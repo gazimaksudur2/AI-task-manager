@@ -13,7 +13,8 @@ def main():
     database = TaskDatabase(settings.sqlite_path)
 
     vector_store = TaskVectorStore(
-        settings.chroma_path
+        settings.chroma_path,
+        max_distance=settings.max_semantic_distance,
     )
 
     service = TaskService(

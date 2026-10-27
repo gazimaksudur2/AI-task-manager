@@ -1,5 +1,11 @@
 # AI Task Manager — Project Specification
 
+> **Current status (2026-10-27):** Stage 4 Streamlit interface, SQLite task storage,
+> local ChromaDB semantic index and LangGraph orchestration are implemented.
+> Sections below labeled Stage 1 / future stages document the **historical
+> implementation plan**, not the current feature state. For setup, tests and
+> operational limitations use the current `README.md`.
+
 ## 1. Goal and scope
 
 Build a single-page, chat-first task manager. A user describes intended task changes in natural language; an LLM proposes a **structured action plan**. Trusted Python code validates and executes it.
@@ -220,3 +226,19 @@ ChromaDB remains a derived semantic index.
 - Durable clarification checkpoints across application restarts
 - Multi-worker concurrency coordination
 - Operational logging and deployment hardening
+
+
+## Final verification and reliability additions (October 2026)
+
+- Provider configuration example uses one active provider/model pair; no secrets stored.
+- OpenAI now initializes a structured-output parser alongside the other providers.
+- The real LLM planner rejects task IDs not present in the user request.
+- UPDATE with a blank description is rejected unless an explicit clearing action is requested.
+- Persisted created/updated timestamps use UTC; relative/overdue dates use Asia/Dhaka.
+- SQLite `mutation_receipts` deduplicates committed batches by submission ID,
+  guarding against a duplicate event or lost acknowledgment during a retry.
+- Optional Chroma distance threshold defaults to disabled to preserve ranking until calibrated.
+- Agent, database, vector recovery and browser smoke cases are in
+  `tests/test_end_to_end.py`, `tests/test_database_offline.py` and `docs/VERIFICATION.md`.
+- Still intentionally limited to one local user; LangGraph checkpointer is in-memory
+  and Chroma synchronization is not coordinated between concurrent workers.

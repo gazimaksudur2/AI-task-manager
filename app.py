@@ -9,7 +9,7 @@ import streamlit as st
 
 from task_manager.config import get_settings
 from task_manager.database import TaskDatabase
-from task_manager.graph import build_agent_graph
+from task_manager.graph import build_agent_graph, dhaka_today
 from task_manager.task_service import TaskService
 from task_manager.vector_store import TaskVectorStore
 
@@ -232,7 +232,7 @@ def initialize_chat_state() -> None:
 
 def queue_prompt(text: str) -> None:
     """Button callback: hand a starter prompt to the chat flow."""
-    st.session_state.queued_prompt = text
+    st.session_state.queued_prompt = (text, str(uuid4()))
 
 
 # --------------------------------------------------
@@ -254,7 +254,8 @@ def initialize_runtime(settings) -> None:
         try:
             with st.spinner("Opening semantic task index..."):
                 index = TaskVectorStore(
-                    settings.chroma_path
+                    settings.chroma_path,
+                    max_distance=settings.max_semantic_distance,
                 )
 
                 service = TaskService(
@@ -361,8 +362,11 @@ def render_message(message: dict) -> None:
 # 5. HANDLE A USER INSTRUCTION
 # --------------------------------------------------
 
-def handle_prompt(prompt: str, graph) -> None:
-    """Send instructions to LangGraph, never directly to SQL."""
+def handle_prompt(prompt: str, graph, submission_id: str) -> None:
+    """Process a submission once; the database also deduplicates by ID."""
+    if st.session_state.get("last_submission_id") == submission_id:
+        return
+    st.session_state.last_submission_id = submission_id
 
     st.session_state.messages.append(
         {
@@ -373,7 +377,7 @@ def handle_prompt(prompt: str, graph) -> None:
 
     try:
         result = graph.invoke(
-            {"user_request": prompt},
+            {"user_request": prompt, "submission_id": submission_id},
             config={
                 "configurable": {
                     "thread_id": st.session_state.thread_id
@@ -498,7 +502,7 @@ def render_task_card(task) -> None:
 
     late = (
         due_date is not None
-        and due_date < date.today()
+        and due_date < dhaka_today()
         and _slug(status) != "done"
     )
 
@@ -678,9 +682,12 @@ def main() -> None:
     elif st.session_state.get("graph_error"):
         st.error(
             "The AI workflow could not start. "
-            "Check the provider/model configuration "
-            "and server terminal, then restart Streamlit."
+            "Check the provider/model configuration and server logs."
         )
+        if st.button("Retry AI workflow"):
+            st.session_state.pop("graph_error", None)
+            st.session_state.pop("graph", None)
+            st.rerun()
 
     # ----------------------------------------------
     # RESPONSIVE TWO-COLUMN LAYOUT
@@ -765,7 +772,12 @@ def main() -> None:
             key="task_chat_input",
         )
 
-        prompt = typed if (typed and typed.strip()) else queued_prompt
+        if typed and typed.strip():
+            prompt, submission_id = typed.strip(), str(uuid4())
+        elif queued_prompt:
+            prompt, submission_id = queued_prompt
+        else:
+            prompt, submission_id = None, None
 
         if prompt and prompt.strip() and graph is not None:
 
@@ -775,6 +787,7 @@ def main() -> None:
                 handle_prompt(
                     prompt.strip(),
                     graph,
+                    submission_id,
                 )
 
             # Re-render conversation and reload tasks

@@ -30,15 +30,16 @@ class Settings(BaseModel):
     openai_api_key: SecretStr | None = None
     app_timezone: Literal["Asia/Dhaka"] = "Asia/Dhaka"
     data_dir: Path = PROJECT_ROOT / "data"
+    max_semantic_distance: float | None = Field(default=None, ge=0)
 
     @property
     def sqlite_path(self) -> Path:
-        """Location to use for SQLite in Stage 2 (not created here)."""
+        """Persistent SQLite task storage path."""
         return self.data_dir / "tasks.sqlite3"
 
     @property
     def chroma_path(self) -> Path:
-        """Location to use for ChromaDB in Stage 3 (not created here)."""
+        """Persistent, rebuildable Chroma vector index path."""
         return self.data_dir / "chroma"
 
     @property
@@ -75,4 +76,7 @@ def get_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip() or None,
         app_timezone=os.getenv("APP_TIMEZONE", "Asia/Dhaka").strip(),
         data_dir=data_dir,
+        max_semantic_distance=(
+            os.getenv("MAX_SEMANTIC_DISTANCE", "").strip() or None
+        ),
     )

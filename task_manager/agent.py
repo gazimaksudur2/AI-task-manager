@@ -1,6 +1,7 @@
 
 """LLM adapter: natural language -> validated action plan only."""
 
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -147,6 +148,12 @@ class LLMPlanner:
                 method="json_schema",
             )
 
+        elif settings.llm_provider == "openai":
+            self.structured_model = model.with_structured_output(
+                ActionPlan,
+                method="function_calling",
+            )
+
     def __call__(self, request: str) -> ActionPlan:
         current_date = datetime.now(
             self.timezone
@@ -163,5 +170,19 @@ class LLMPlanner:
 
         raw = self.structured_model.invoke(messages)
 
-        # Never trust provider-level validation alone.
-        return ActionPlan.model_validate(raw)
+        # Never trust provider-level validation alone, including target IDs.
+        plan = ActionPlan.model_validate(raw)
+        for action in plan.actions:
+            if action.target_id is not None:
+                supplied = re.search(
+                    rf"(?<![A-Za-z0-9_-]){re.escape(action.target_id)}"
+                    rf"(?![A-Za-z0-9_-])",
+                    request,
+                    flags=re.IGNORECASE,
+                )
+                if supplied is None:
+                    raise ValueError(
+                        "The model proposed a task ID not supplied by the user. "
+                        "Please identify the task by its ID or title."
+                    )
+        return plan

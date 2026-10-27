@@ -21,7 +21,11 @@ class TaskVectorStore:
         self,
         path: str | Path,
         embedding_function=None,
+        max_distance: float | None = None,
     ):
+        if max_distance is not None and max_distance < 0:
+            raise ValueError("max_distance must not be negative")
+        self.max_distance = max_distance
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
 
@@ -168,6 +172,7 @@ class TaskVectorStore:
             )
             for task_id, distance
             in zip(ids, distances)
+            if self.max_distance is None or distance <= self.max_distance
         ]
 
     def reconcile(

@@ -32,6 +32,7 @@ TARGET_MUTATIONS = MUTATIONS - {Operation.CREATE}
 
 class AgentState(TypedDict, total=False):
     user_request: str
+    submission_id: str
     plan: dict | None
     resolved_targets: dict[str, str]
     target_versions: dict[str, int]
@@ -555,7 +556,10 @@ def build_agent_graph(
 
         if mutations:
             try:
-                saved = service.apply_mutations(mutations)
+                saved = service.apply_mutations(
+                    mutations,
+                    request_id=state.get("submission_id"),
+                )
 
             except BatchSyncError as exc:
                 # The SQLite commit was confirmed, but the
@@ -563,13 +567,13 @@ def build_agent_graph(
                 saved = exc.results
                 index_pending = True
 
-            except Exception as exc:
+            except Exception:
+                logger.exception("Task mutation batch failed")
                 return {
                     "execution_results": [],
                     "validation_errors": [
-                        "Batch execution failed without a "
-                        "confirmed result. Check SQLite before "
-                        f"retrying. Details: {exc}"
+                        "Batch execution failed without a confirmed result. "
+                        "Check SQLite before retrying; no success was confirmed."
                     ],
                     "route": "respond",
                 }

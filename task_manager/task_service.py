@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 
 from .database import TaskDatabase
 from .models import Priority, Status, Task, TaskFilters
 from .vector_store import TaskVectorStore
+
+logger = logging.getLogger(__name__)
 
 
 class IndexSyncError(RuntimeError):
@@ -217,14 +220,28 @@ class TaskService:
 
         return results
 
-    def apply_mutations(self, mutations: list[dict]) -> list[dict]:
+    def apply_mutations(
+        self, mutations: list[dict], request_id: str | None = None,
+    ) -> list[dict]:
         """Commit all SQLite mutations, then synchronize Chroma."""
 
-        results = self.database.apply_mutations(mutations)
+        # Preserve the original data-layer API for callers that do not
+        # provide a chat submission identifier (including legacy tests).
+        if request_id is None:
+            results = self.database.apply_mutations(mutations)
+        else:
+            results = self.database.apply_mutations(
+                mutations, request_id=request_id,
+            )
 
         try:
             self.sync_pending()
         except IndexSyncError as exc:
+            logger.warning(
+                "SQLite committed %d mutations; semantic index sync pending",
+                len(results),
+            )
             raise BatchSyncError(results) from exc
 
+        logger.info("Confirmed %d SQLite task mutations", len(results))
         return results
