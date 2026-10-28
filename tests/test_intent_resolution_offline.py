@@ -5,11 +5,13 @@ from dataclasses import dataclass
 import pytest
 
 from task_manager.intent_resolution import (
+    appropriate_description_target,
     is_cancel_request,
     is_new_instruction,
     is_simple_list_request,
     is_unqualified_delete_request,
     partial_title_matches,
+    related_search_request,
     title_search_query,
 )
 
@@ -60,6 +62,23 @@ def test_targeted_deletes_are_not_unqualified(text):
 ])
 def test_title_search_extracts_literal_query(text):
     assert title_search_query(text) == "hangout"
+
+
+def test_appropriate_description_request_extracts_task_reference():
+    assert appropriate_description_target(
+        "add an appropriate description for the task finish ai assignment"
+    ) == "finish ai assignment"
+
+
+@pytest.mark.parametrize("text", [
+    "show me task related to ai assignment",
+    "show all unfinished tasks related to hangout",
+])
+def test_related_search_request_extracts_query_and_filter(text):
+    query = related_search_request(text)
+    assert query is not None
+    assert query[0] in {"ai assignment", "hangout"}
+    assert query[1] is ("unfinished" in text)
 
 
 @pytest.mark.parametrize("text", [

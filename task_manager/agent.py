@@ -35,6 +35,10 @@ Rules:
 - "Move task to In progress" means CHANGE_STATUS.
 - "Mark task done" means COMPLETE.
 - "Show tasks related to X" means SEARCH.
+- "Show me task related to X" also means SEARCH with query X.
+- "Add an appropriate description for task X" means UPDATE its description
+    with a concise, useful description based only on the task title and known
+    details; do not invent assignment-specific requirements.
 - "Show all tasks" means LIST.
 - "Unfinished" means unfinished=true.
 - Priority must be Low, Medium or High.

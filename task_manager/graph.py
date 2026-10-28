@@ -14,9 +14,10 @@ from .agent import LLMPlanner
 from .agent_models import ActionPlan, Operation
 from .models import Status
 from .intent_resolution import (
-    is_cancel_request, is_new_instruction, is_simple_list_request,
+    appropriate_description_target, is_cancel_request,
+    is_new_instruction, is_simple_list_request,
     is_unqualified_delete_request, partial_title_matches,
-    title_search_query,
+    related_search_request, title_search_query,
 )
 from .task_service import BatchSyncError, TaskService
 
@@ -295,6 +296,15 @@ def _mutation_fields(action) -> dict:
     return fields
 
 
+def _append_description(existing: str | None, addition: str) -> str:
+    current = (existing or "").strip()
+    if not current:
+        return addition
+    if addition.casefold() in current.casefold():
+        return current
+    return f"{current}\n{addition}"
+
+
 def build_agent_graph(
     service: TaskService,
     planner: Callable[[str], ActionPlan] | None = None,
@@ -341,6 +351,57 @@ def build_agent_graph(
             pending = None
 
         if pending:
+            if pending["kind"] == "description_selection":
+                selected = _clarification_selection(
+                    request, pending, service
+                )
+                candidate = next(
+                    (
+                        item for item in pending["candidates"]
+                        if item["id"] == selected
+                    ),
+                    None,
+                )
+                task = (
+                    service.get_task(selected)
+                    if candidate is not None
+                    else None
+                )
+
+                if candidate is None or task is None:
+                    return {
+                        "route": "clarify",
+                        "response": "",
+                    }
+                if task.revision != candidate["revision"]:
+                    return {
+                        "validation_errors": [
+                            "The selected task changed while you were "
+                            "choosing it. Please submit the request again."
+                        ],
+                        "pending_clarification": None,
+                        "route": "respond",
+                    }
+
+                description = _append_description(
+                    task.description, pending["description"]
+                )
+                plan = ActionPlan.model_validate({
+                    "actions": [{
+                        "operation": "UPDATE",
+                        "target_id": task.id,
+                        "description": description,
+                    }],
+                })
+                return {
+                    "plan": plan.model_dump(mode="json"),
+                    "resolved_targets": {"0": task.id},
+                    "target_versions": {"0": task.revision},
+                    "pending_clarification": None,
+                    "route": "validate",
+                    "response": "",
+                }
+
             if pending["kind"] == "delete_selection":
                 selected = _clarification_selection(
                     request, pending, service
@@ -454,9 +515,104 @@ def build_agent_graph(
                     "response": "",
                 }
 
+            description_target = appropriate_description_target(request)
+            if description_target is not None:
+                tasks = service.all_tasks()
+                matches = [
+                    task for task in tasks
+                    if description_target.casefold()
+                    in task.title.casefold()
+                ]
+                if not matches:
+                    matches = partial_title_matches(
+                        description_target, tasks
+                    )
+                semantic_only = not matches
+                if not matches:
+                    matches = [
+                        result.task
+                        for result in service.search_tasks(
+                            description_target, limit=5
+                        )
+                    ]
+
+                generated_description = (
+                    "Complete "
+                    f"\"{description_target}\" by working through its "
+                    "requirements and reviewing the finished work."
+                )
+
+                if len(matches) > 1 or (semantic_only and matches):
+                    candidates = [
+                        {
+                            "id": task.id,
+                            "title": task.title,
+                            "revision": task.revision,
+                        }
+                        for task in matches
+                    ]
+                    pending = {
+                        "kind": "description_selection",
+                        "candidates": candidates,
+                        "description": generated_description,
+                        "prompt": _task_options(
+                            candidates,
+                            question=(
+                                "Which task should receive this "
+                                "description?"
+                            ),
+                        ),
+                    }
+                    return {
+                        "plan": None,
+                        "pending_clarification": pending,
+                        "resolved_targets": {},
+                        "target_versions": {},
+                        "validation_errors": [],
+                        "execution_results": [],
+                        "route": "clarify",
+                        "response": "",
+                    }
+
+                if len(matches) == 1:
+                    target_title = matches[0].title
+                    generated_description = (
+                        "Complete "
+                        f"\"{target_title}\" by working through its "
+                        "requirements and reviewing the finished work."
+                    )
+                    description = _append_description(
+                        matches[0].description,
+                        generated_description,
+                    )
+                    action = {
+                        "operation": "UPDATE",
+                        "target_id": matches[0].id,
+                        "description": description,
+                    }
+                else:
+                    action = {
+                        "operation": "UPDATE",
+                        "target_title": description_target,
+                        "description": generated_description,
+                    }
+
+                plan = ActionPlan.model_validate({
+                    "actions": [action],
+                })
+            elif (related_search := related_search_request(request)):
+                query, unfinished = related_search
+                plan = ActionPlan.model_validate({
+                    "actions": [{
+                        "operation": "SEARCH",
+                        "query": query,
+                        "unfinished": unfinished,
+                    }],
+                })
+
             # Unfiltered task-list commands are deterministic and do not
             # require an LLM call, even after a pending clarification.
-            if is_simple_list_request(request):
+            elif is_simple_list_request(request):
                 plan = ActionPlan.model_validate({
                     "actions": [{"operation": "LIST"}],
                 })

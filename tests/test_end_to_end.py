@@ -482,3 +482,64 @@ def test_title_search_lists_all_literal_title_matches_without_planner(service):
     assert second.title in result["response"]
     assert "Prepare project demo" not in result["response"]
     assert planner.calls == []
+
+
+def test_appropriate_description_updates_task_and_preserves_notes(
+    service,
+):
+    task = service.create_task(
+        title="Finish AI assignment",
+        description="Time: 10:00 PM",
+    )
+    planner = RequestPlanner({})
+    graph = build_agent_graph(service, planner=planner)
+
+    result = answer(
+        graph,
+        "add an appropriate description for the task finish ai assignment",
+        "appropriate-description",
+        "message-1",
+    )
+
+    updated = service.get_task(task.id)
+    assert "Updated" in result["response"]
+    assert "Time: 10:00 PM" in updated.description
+    assert "reviewing the finished work" in updated.description
+    assert planner.calls == []
+
+
+def test_related_search_phrase_uses_semantic_search_without_planner(service):
+    service.create_task(title="Finish AI assignment")
+    service.create_task(title="Plan a weekend hangout")
+    planner = RequestPlanner({})
+    graph = build_agent_graph(service, planner=planner)
+
+    result = answer(
+        graph,
+        "show me task related to ai assignment",
+        "related-ai-search",
+        "message-1",
+    )
+
+    assert "Finish AI assignment" in result["response"]
+    assert planner.calls == []
+
+
+def test_related_search_phrase_respects_unfinished_filter(service):
+    unfinished = service.create_task(
+        title="Finish AI assignment", status="Todo"
+    )
+    service.create_task(title="Review AI assignment", status="Done")
+    planner = RequestPlanner({})
+    graph = build_agent_graph(service, planner=planner)
+
+    result = answer(
+        graph,
+        "show all unfinished tasks related to ai assignment",
+        "unfinished-related-search",
+        "message-1",
+    )
+
+    assert unfinished.title in result["response"]
+    assert "Review AI assignment" not in result["response"]
+    assert planner.calls == []

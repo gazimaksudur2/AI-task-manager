@@ -45,6 +45,22 @@ _TITLE_SEARCH = re.compile(
     r"(?:in|on)\s+(?:(?:the|its|their)\s+)?title[.!?]?$",
     re.IGNORECASE,
 )
+_APPROPRIATE_DESCRIPTION = re.compile(
+    r"^(?:(?:please|can you|could you)\s+)?"
+    r"(?:add|write|create|generate|set)\s+"
+    r"(?:an?\s+)?(?:appropriate|helpful|useful|clear)\s+description\s+"
+    r"(?:for|to)\s+(?:(?:the|my)\s+)?(?:task\s+)?"
+    r"(?P<target>.+?)[.!?]?$",
+    re.IGNORECASE,
+)
+_RELATED_SEARCH = re.compile(
+    r"^(?:(?:please|can you|could you)\s+)?"
+    r"(?:show|find|search|list|display)\s+"
+    r"(?:(?:me|all|my|the|unfinished)\s+)*tasks?\s+"
+    r"(?:(?:that|which)\s+(?:are|is)\s+)?"
+    r"related\s+to\s+(?P<query>.+?)[.!?]?$",
+    re.IGNORECASE,
+)
 # Includes short commands like 'find all' and 'show all'. Do not intercept
 # filtered queries ('show high priority tasks', 'find documentation').
 _GENERIC_TITLE_WORDS = frozenset({
@@ -88,6 +104,23 @@ def title_search_query(message: str) -> str | None:
     if match is None:
         return None
     return match.group("query").strip()
+
+
+def appropriate_description_target(message: str) -> str | None:
+    match = _APPROPRIATE_DESCRIPTION.fullmatch(message.strip())
+    if match is None:
+        return None
+    return match.group("target").strip()
+
+
+def related_search_request(message: str) -> tuple[str, bool] | None:
+    match = _RELATED_SEARCH.fullmatch(message.strip())
+    if match is None:
+        return None
+    return (
+        match.group("query").strip(),
+        bool(re.search(r"\bunfinished\b", message, re.IGNORECASE)),
+    )
 
 
 def partial_title_matches(fragment: str, tasks: Iterable[TaskT]) -> list[TaskT]:
