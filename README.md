@@ -12,6 +12,12 @@ A local, single-user task manager for creating, finding, updating, completing, a
 
 The LLM only proposes structured actions. Pydantic and Python validate them; SQLite is the source of truth, while ChromaDB is a derived search index. Multi-action mutations are validated as a batch and committed in one SQLite transaction.
 
+## Architecture and search
+
+LangGraph coordinates the request workflow: it asks the configured LLM planner for a structured action plan, routes the plan through validation and target resolution, requests clarification when a mutation target is ambiguous, then executes valid actions and formats the result. The LLM does not execute database operations. Python and Pydantic validate its proposed actions before the task service can make changes.
+
+SQLite stores the authoritative task records. ChromaDB stores a rebuildable search index: task titles and descriptions are converted into embeddings, numerical representations that let the index find text with similar meaning even when it uses different words. Search returns ranked candidate task IDs; the service loads the current task records from SQLite before returning results. If the index is missing or stale, it can be reconciled from SQLite.
+
 ## Requirements
 
 - **Python 3.12** (recommended project version), `pip`, and `venv`.
@@ -77,6 +83,7 @@ Shell environment variables override `.env`; if the wrong provider/model is sele
 With the virtual environment active:
 
 ```bash
+source .venv/bin/activate
 python -m streamlit run app.py
 ```
 
@@ -166,3 +173,11 @@ tests/                         # Automated unit and integration tests
 ## Limitations
 
 This is a local, single-user prototype with no authentication, role separation, encryption, cloud backups, or production deployment safeguards. Chat history and clarification checkpoints are in memory, and concurrent app processes are not coordinated for ChromaDB writes. Run one Streamlit process and do not expose the app publicly without adding appropriate security and operational controls.
+
+## Possible future improvements
+
+- Add authentication and authorization before supporting multiple users or public access.
+- Persist chat history and clarification checkpoints across restarts.
+- Coordinate ChromaDB writes across app processes, and add operational monitoring for index synchronization.
+- Add encrypted, automated backups and documented restore procedures for SQLite data.
+- Harden deployment and secret-management practices before hosting the app beyond a trusted local machine.
