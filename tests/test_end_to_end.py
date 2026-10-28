@@ -403,3 +403,61 @@ def test_date_clarification_can_be_interrupted_by_a_read_request(service):
     assert result["pending_clarification"] is None
     assert "No tasks found" in result["response"]
     assert service.count_tasks() == 0
+
+
+@pytest.mark.parametrize(
+    ("request_text", "selection"),
+    [("delete all tasks", "2"), ("delete tasks", "TSK-000002")],
+)
+def test_unqualified_delete_lists_tasks_and_deletes_only_selection(
+    service, request_text, selection,
+):
+    first = service.create_task(title="Prepare project demo")
+    second = service.create_task(title="Review project report")
+    planner = RequestPlanner({})
+    graph = build_agent_graph(service, planner=planner)
+    thread = "unqualified-delete"
+
+    prompt = answer(graph, request_text, thread, "message-1")
+
+    assert prompt["pending_clarification"] is not None
+    assert "Which task should I delete?" in prompt["response"]
+    assert first.id in prompt["response"]
+    assert first.title in prompt["response"]
+    assert second.id in prompt["response"]
+    assert second.title in prompt["response"]
+    assert service.count_tasks() == 2
+    assert planner.calls == []
+
+    result = answer(graph, selection, thread, "message-2")
+
+    assert result["pending_clarification"] is None
+    assert "Deleted TSK-000002" in result["response"]
+    assert service.get_task(first.id) is not None
+    assert service.get_task(second.id) is None
+
+
+def test_unqualified_delete_with_no_tasks_reports_empty_list(service):
+    planner = RequestPlanner({})
+    graph = build_agent_graph(service, planner=planner)
+
+    result = answer(graph, "delete tasks", "empty-delete", "message-1")
+
+    assert result["response"] == "There are no tasks to delete."
+    assert result.get("pending_clarification") is None
+    assert planner.calls == []
+
+
+def test_unqualified_delete_does_not_delete_task_changed_after_prompt(service):
+    task = service.create_task(title="Prepare project demo")
+    graph = build_agent_graph(service, planner=RequestPlanner({}))
+    thread = "stale-delete-choice"
+
+    prompt = answer(graph, "delete tasks", thread, "message-1")
+    assert prompt["pending_clarification"] is not None
+
+    service.update_task(task.id, title="Updated project demo")
+    result = answer(graph, "1", thread, "message-2")
+
+    assert "deleted or changed" in result["response"]
+    assert service.get_task(task.id).title == "Updated project demo"

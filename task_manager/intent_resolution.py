@@ -29,6 +29,13 @@ _SIMPLE_LIST = re.compile(
     r"(?:(?:me|the|all|my|tasks?)\s*)+[.!?]?$",
     re.IGNORECASE,
 )
+_UNQUALIFIED_DELETE = re.compile(
+    r"^(?:(?:please|can you|could you|would you)\s+)*"
+    r"(?:delete|remove)\s+"
+    r"(?:(?:all(?:\s+of)?|my|the|every)\s+)*"
+    r"tasks?[.!?]?$",
+    re.IGNORECASE,
+)
 # Includes short commands like 'find all' and 'show all'. Do not intercept
 # filtered queries ('show high priority tasks', 'find documentation').
 _GENERIC_TITLE_WORDS = frozenset({
@@ -61,6 +68,10 @@ def is_new_instruction(message: str) -> bool:
 def is_simple_list_request(message: str) -> bool:
     text = message.strip()
     return bool(_SIMPLE_LIST.fullmatch(text)) and bool(re.search(r"\b(?:all|tasks?)\b", text, re.I))
+
+
+def is_unqualified_delete_request(message: str) -> bool:
+    return bool(_UNQUALIFIED_DELETE.fullmatch(message.strip()))
 
 
 def partial_title_matches(fragment: str, tasks: Iterable[TaskT]) -> list[TaskT]:

@@ -15,7 +15,7 @@ from .agent_models import ActionPlan, Operation
 from .models import Status
 from .intent_resolution import (
     is_cancel_request, is_new_instruction, is_simple_list_request,
-    partial_title_matches,
+    is_unqualified_delete_request, partial_title_matches,
 )
 from .task_service import BatchSyncError, TaskService
 
@@ -196,7 +196,10 @@ ORDINALS = {
 }
 
 
-def _task_options(candidates: list[dict]) -> str:
+def _task_options(
+    candidates: list[dict],
+    question: str = "Which task do you mean?",
+) -> str:
     if not candidates:
         return (
             "No matching task was found. "
@@ -209,9 +212,9 @@ def _task_options(candidates: list[dict]) -> str:
     ]
 
     return (
-        "Which task do you mean?\n"
+        question + "\n"
         + "\n".join(lines)
-        + "\nReply with its ID or option number."
+        + "\n\n\n Reply with its ID or option number."
     )
 
 
@@ -246,14 +249,14 @@ def _clarification_selection(
             return candidates[position]["id"]
 
     match = re.fullmatch(
-        r"(?:option\s+)?([1-5])",
+        r"(?:option\s+)?(\d+)",
         value,
         re.I,
     )
 
     if match:
         position = int(match.group(1)) - 1
-        if position < len(candidates):
+        if 0 <= position < len(candidates):
             return candidates[position]["id"]
 
     # A manually provided exact title is also acceptable.
@@ -337,6 +340,43 @@ def build_agent_graph(
             pending = None
 
         if pending:
+            if pending["kind"] == "delete_selection":
+                selected = _clarification_selection(
+                    request, pending, service
+                )
+
+                candidate = next(
+                    (
+                        item for item in pending["candidates"]
+                        if item["id"] == selected
+                    ),
+                    None,
+                )
+
+                if candidate is None:
+                    return {
+                        "route": "clarify",
+                        "response": "",
+                    }
+
+                return {
+                    "plan": {
+                        "actions": [{
+                            "operation": "DELETE",
+                            "target_id": selected,
+                        }],
+                    },
+                    "resolved_targets": {"0": selected},
+                    "target_versions": {
+                        "0": candidate["revision"],
+                    },
+                    "pending_clarification": None,
+                    "validation_errors": [],
+                    "execution_results": [],
+                    "route": "validate",
+                    "response": "",
+                }
+
             plan = deepcopy(state["plan"])
             index = pending["index"]
 
@@ -395,6 +435,50 @@ def build_agent_graph(
                 plan = ActionPlan.model_validate({
                     "actions": [{"operation": "LIST"}],
                 })
+            elif is_unqualified_delete_request(request):
+                tasks = service.all_tasks()
+                if not tasks:
+                    return {
+                        "plan": None,
+                        "pending_clarification": None,
+                        "resolved_targets": {},
+                        "target_versions": {},
+                        "validation_errors": [],
+                        "execution_results": [{
+                            "kind": "notice",
+                            "message": "There are no tasks to delete.",
+                        }],
+                        "route": "respond",
+                        "response": "",
+                    }
+
+                candidates = [
+                    {
+                        "id": task.id,
+                        "title": task.title,
+                        "revision": task.revision,
+                    }
+                    for task in tasks
+                ]
+                pending = {
+                    "kind": "delete_selection",
+                    "index": 0,
+                    "candidates": candidates,
+                    "prompt": _task_options(
+                        candidates,
+                        question="Which task should I delete?",
+                    ),
+                }
+                return {
+                    "plan": None,
+                    "resolved_targets": {},
+                    "target_versions": {},
+                    "pending_clarification": pending,
+                    "validation_errors": [],
+                    "execution_results": [],
+                    "route": "clarify",
+                    "response": "",
+                }
             else:
                 proposed = planner(request)
                 plan = ActionPlan.model_validate(proposed)

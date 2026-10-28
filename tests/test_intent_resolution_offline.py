@@ -8,6 +8,7 @@ from task_manager.intent_resolution import (
     is_cancel_request,
     is_new_instruction,
     is_simple_list_request,
+    is_unqualified_delete_request,
     partial_title_matches,
 )
 
@@ -34,6 +35,21 @@ def test_simple_list_bypasses_stale_clarification(text):
 def test_filtered_or_mutating_commands_are_not_unfiltered_list(text):
     assert not is_simple_list_request(text)
     assert is_new_instruction(text)
+
+
+@pytest.mark.parametrize("text", [
+    "delete all tasks", "delete tasks", "remove my tasks",
+    "could you delete every task?",
+])
+def test_unqualified_delete_requests_need_a_task_choice(text):
+    assert is_unqualified_delete_request(text)
+
+
+@pytest.mark.parametrize("text", [
+    "delete the demo task", "remove task TSK-000001",
+])
+def test_targeted_deletes_are_not_unqualified(text):
+    assert not is_unqualified_delete_request(text)
 
 
 @pytest.mark.parametrize("text", [
