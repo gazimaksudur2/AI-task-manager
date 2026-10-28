@@ -1,44 +1,31 @@
 # AI Task Manager
 
-Single-page, **local single-user** task manager with natural-language commands. The application uses Streamlit for the interface, LangGraph for orchestration, a configurable LLM to **propose** structured actions, Pydantic for validation, SQLite for durable task records, and ChromaDB for semantic task search. The model never executes SQL or filesystem writes.
+A local, single-user task manager for creating, finding, updating, completing, and deleting tasks with natural-language chat. The Streamlit page includes the conversation, task board, status/priority filters, and refresh control.
 
-**Status:** Stage 4 implemented; backend integration and real-provider smoke tests must be run in the target Ubuntu/VS Code environment before final deployment. The project is **not** designed for public or multi-user hosting.
+## Features
 
-## Architecture
+- Task IDs (`TSK-000001`), descriptions, priorities, statuses, and due dates.
+- Natural-language commands, semantic search, and multiple actions in one request.
+- Clarification for missing or ambiguous targets; invalid plans are rejected before changes are made.
+- SQLite persistence and a rebuildable ChromaDB search index.
+- OpenAI, Google Gemini, Groq, or Anthropic as the LLM provider.
 
-```text
-Streamlit chat + task board
-        |
-        v
-LangGraph: understand -> validate/resolve -> clarify OR execute -> respond
-        |                       |
-        v                       v
-Groq / Gemini / OpenAI /        TaskService (allowlisted mutations)
-Anthropic structured planner      |                 |
-                                 SQLite             ChromaDB
-                              source of truth     derived vector index
-                                 |                 ^
-                                 +-- sync queue ---+
-```
+The LLM only proposes structured actions. Pydantic and Python validate them; SQLite is the source of truth, while ChromaDB is a derived search index. Multi-action mutations are validated as a batch and committed in one SQLite transaction.
 
-- **SQLite** contains authoritative tasks, numeric AUTOINCREMENT task keys displayed as `TSK-000001`, revision numbers, a durable Chroma synchronization queue, and idempotency receipts. Deleting a task never reuses its identifier.
-- **ChromaDB** embeds the task's title and description so different phrases can retrieve related tasks. It is **not** authoritative; candidate IDs are re-read from SQLite. Its local default embedding model may download model weights at first use and require network access. A deleted task cannot be recreated from the vector index.
-- **Embeddings** are numeric representations of text: similar task wording tends to have nearby vectors. Semantic search ranks approximate matches and may return irrelevant entries. `MAX_SEMANTIC_DISTANCE` optionally filters results; it is intentionally unset until calibrated for the selected model and distance metric.
-- **LangGraph** maintains the request/clarification workflow for the current app session. Read-only LIST/SEARCH requests do not mutate SQLite; a batch of mutations is prevalidated and committed in one SQLite transaction. Clarifications defer *all* writes until resolved.
-- **Reliability:** The app assigns a unique submission ID per chat submission. SQLite atomically saves a receipt for successful mutation batches, so the same submission ID cannot apply a batch twice. Chroma writes occur only after the SQLite commit. If indexing fails, the committed task remains and an index-repair warning is returned.
+## Requirements
 
-## Prerequisites
+- **Python 3.12** (recommended project version), `pip`, and `venv`.
+- An API key for one supported LLM provider to use AI chat.
+- Internet access for installing packages, provider requests, and the first ChromaDB embedding-model download if needed.
 
-- **Python 3.12**, ideally with `python3.12-venv` and `python3.12-pip` available on Ubuntu.
-- Git and VS Code (recommended) with the Microsoft Python extension.
-- A usable LLM API key (OpenAI, Groq, Google Gemini, or Anthropic) for AI chat; SQLite read-only display works without it.
-- Internet initially for installing packages, optional default Chroma embedding weights and the chosen LLM provider.
+No separate database server is required; SQLite is included with Python.
 
-## Ubuntu / VS Code setup
+## Setup on Ubuntu / Linux
 
-Open **File → Open Folder** in VS Code and select the `ai-task-manager` project directory. Open **Terminal → New Terminal**, then run:
+Open a terminal in the project directory—the folder containing `app.py` and `requirements.txt`. If `python3` is unavailable, install Python 3.12 and its `venv` package for your Ubuntu release first.
 
 ```bash
+python3 --version
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -46,153 +33,136 @@ python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set the VS Code interpreter using **Python: Select Interpreter → `.venv/bin/python`**. On subsequent sessions run `source .venv/bin/activate`. If your Ubuntu command is `python3`, check `python3 --version` and ensure the version meets the project requirement.
+If `.env` already exists, edit it rather than overwriting it. In VS Code, open the project folder and select `.venv/bin/python` with **Python: Select Interpreter**.
 
-On Windows PowerShell use `py -3.12 -m venv .venv`, `.\.venv\Scripts\Activate.ps1`, then the same pip, copy, test and run commands (`Copy-Item .env.example .env`).
+### Windows PowerShell
 
-## OpenAI API-key configuration
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+```
 
-1. Go to [OpenAI API keys](https://platform.openai.com/api-keys), select the intended API project, and create a secret key. Store it securely; it may be shown only once.
-2. Open the local `.env` file (which is ignored by Git) and configure exactly one provider/model pair:
+## Configure the provider
+
+Edit `.env` and set **one matching provider/model pair** and its API key. The template selects OpenAI but leaves the key blank. Model names below are examples; use a model currently available to your account.
 
 ```dotenv
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-4o-mini
-OPENAI_API_KEY=YOUR_OWN_SECRET_KEY_HERE
+OPENAI_API_KEY=your_key_here
+GOOGLE_API_KEY=
+GROQ_API_KEY=
+CLAUDE_API_KEY=
 APP_TIMEZONE=Asia/Dhaka
 DATA_DIR=data
 MAX_SEMANTIC_DISTANCE=
 ```
 
-3. Save `.env`, then restart Streamlit. Use a model ID enabled in *your* API project; model availability, costs, rate limits and method support can change.
-4. **API usage and billing are separate from a ChatGPT subscription.** Never paste your real key into a repository, issue, screenshot, or shared project export.
+| Provider | `LLM_PROVIDER` | Example model | Key variable |
+| --- | --- | --- | --- |
+| OpenAI | `openai` | `gpt-4o-mini` | `OPENAI_API_KEY` |
+| Google Gemini | `google` | `gemini-2.5-flash` | `GOOGLE_API_KEY` |
+| Groq | `groq` | `openai/gpt-oss-120b` | `GROQ_API_KEY` |
+| Anthropic | `anthropic` | `claude-sonnet-4-6` | `CLAUDE_API_KEY` |
 
-Alternative examples (change **both** provider and model):
+Keep unused keys blank. `APP_TIMEZONE` is currently restricted to `Asia/Dhaka`; leave `MAX_SEMANTIC_DISTANCE` blank unless you have calibrated a cutoff for your embedding model. Never commit or share `.env`. Provider API usage may incur separate charges.
 
-```dotenv
-# Google Gemini (use GOOGLE_API_KEY=...)
-LLM_PROVIDER=google
-LLM_MODEL=gemini-2.5-flash
+Shell environment variables override `.env`; if the wrong provider/model is selected, check whether `LLM_PROVIDER` or `LLM_MODEL` is already exported. Restart Streamlit after configuration changes.
 
-# Groq (use GROQ_API_KEY=...)
-# LLM_PROVIDER=groq
-# LLM_MODEL=openai/gpt-oss-120b
+## Run the app
 
-# Anthropic (use CLAUDE_API_KEY=...)
-# LLM_PROVIDER=anthropic
-# LLM_MODEL=claude-sonnet-4-6
-```
-
-Only leave one active `LLM_PROVIDER` and `LLM_MODEL` pair in your actual `.env`. The remaining keys can stay blank. An existing exported shell variable overrides `.env`; for example, check `echo "$LLM_PROVIDER"` if your selected provider seems unexpected. The model is used only for structured intent parsing; it does not directly write tasks.
-
-## Run the application
+With the virtual environment active:
 
 ```bash
-source .venv/bin/activate
 python -m streamlit run app.py
 ```
 
-Open the local address printed by Streamlit, usually `http://localhost:8501`. Keep the development server private. Stop it with Ctrl+C. The page shows chat and task cards side by side on desktops, plus status/priority filters and a refresh control. Descriptions are shown in expandable sections.
+Open the local URL shown in the terminal, usually `http://localhost:8501`. Stop the server with **Ctrl+C**. Without a provider key, the page can display saved tasks from SQLite, but AI chat is disabled.
 
-### Example natural-language commands
+## Example commands
 
 - `Create a high-priority task to prepare my demo tomorrow.`
 - `Show all my tasks.`
-- `Find unfinished tasks related to documentation.`
+- `Show unfinished tasks related to documentation.`
 - `Move TSK-000001 to In progress.`
 - `Change TSK-000001 priority to Low.`
-- `Rename TSK-000001 to Final demonstration.`
-- `Clear the due date on TSK-000001.`
 - `Mark TSK-000001 done.`
 - `Delete TSK-000001.`
-- `Complete TSK-000001 and set TSK-000002 priority to High.`
 
-Task IDs, explicit unique titles, and confirmed semantic candidates are supported. If a title is shared by multiple tasks, the agent asks which one you mean **without performing any mutations**. Supported statuses: `Todo`, `In progress`, `Done`; supported priorities: `Low`, `Medium`, `High`. Due dates include `YYYY-MM-DD`, `today`, `tomorrow`, `day after tomorrow`, `in N days`, and `this/next weekday`. Other date phrasing requires an exact date confirmation. Relative dates use Asia/Dhaka. `next Friday` follows the implementation's *following-week* convention.
+Statuses: `Todo`, `In progress`, `Done`. Priorities: `Low`, `Medium`, `High`. Due dates support `YYYY-MM-DD`, `today`, `tomorrow`, `day after tomorrow`, `in N days`, and supported weekday phrases (`next Friday` uses the following-week convention). For ambiguous targets, identify the task by ID or unique title rather than asking the agent to guess.
 
 ## Tests
+
+Run from the project root:
 
 ```bash
 python -m pytest -q
 python -m pytest tests/test_end_to_end.py -v
-python -m pytest tests/test_database_offline.py tests/test_config.py -q
 python -m compileall -q app.py task_manager tests
 ```
 
-- All model-dependent agent tests use **fake planners**; the test suite does not need or call real LLM APIs. End-to-end integration tests use temporary SQLite and Chroma files, and a deterministic, local test embedder.
-- `tests/test_end_to_end.py` covers the requested fourteen scenarios, including persistence, semantic search, multi-field updates, ambiguous-target clarification, atomic batches and simulated failures.
-- `tests/test_database_offline.py` and `tests/test_config.py` can run with just `pytest`, `pydantic`, and `python-dotenv` installed; they also test idempotent submissions and rollback after a write is attempted.
-- Real UI and provider smoke tests are **manual**. Use the [verification checklist](docs/VERIFICATION.md) for observable steps and expected results. Do not describe a real provider or Streamlit run as verified until performed in the target machine.
+Automated agent tests use fake planners and do not require live LLM calls. A real-provider smoke test needs a valid key, an available model, network access, and account quota.
 
-## Persistence and recovery
+## Data and recovery
 
-| Data | Default location | Git-tracked? |
-| --- | --- | --- |
-| SQLite tasks, revisions, index queue, mutation receipts | `data/tasks.sqlite3` | No |
-| Chroma collection, embeddings, metadata | `data/chroma/` | No |
-| Credentials | `.env` | No |
-| Safe configuration template | `.env.example` | Yes |
-| Python virtual environment | `.venv/` | No |
+- `data/tasks.sqlite3` — authoritative task records, revisions, index queue, and mutation receipts.
+- `data/chroma/` — rebuildable semantic search index.
+- `.env` — provider credentials and settings; `.venv/` — virtual environment.
 
-The `DATA_DIR` environment variable can change the `data/` location; relative paths resolve from the project root. Chat history and clarification checkpoints are held in process/browser-session memory and may disappear on a full reload or server restart. Saved tasks do not disappear.
-
-**To recover semantic search:** stop Streamlit and run from the project root:
+These runtime files are excluded by `.gitignore`. `DATA_DIR` can change the data location; relative paths resolve from the project root. Back up SQLite with the app stopped. **Do not delete SQLite to fix ChromaDB.** If search results are stale, stop Streamlit and rebuild the index from SQLite:
 
 ```bash
-source .venv/bin/activate
 python - <<'PY'
 from task_manager.config import get_settings
 from task_manager.database import TaskDatabase
 from task_manager.vector_store import TaskVectorStore
 from task_manager.task_service import TaskService
+
 cfg = get_settings()
-service = TaskService(
-    TaskDatabase(cfg.sqlite_path),
-    TaskVectorStore(cfg.chroma_path, max_distance=cfg.max_semantic_distance),
-)
-print('Reconciled (upserts, deletions):', service.reconcile_index())
-print('Pending index changes:', service.database.pending_index_changes())
+db = TaskDatabase(cfg.sqlite_path)
+index = TaskVectorStore(cfg.chroma_path, max_distance=cfg.max_semantic_distance)
+service = TaskService(db, index)
+print("Reconciled (upserts, deletions):", service.reconcile_index())
+print("Pending index changes:", db.pending_index_changes())
 PY
 ```
 
-This rebuilds missing/stale vector records using the authoritative SQLite task table. **Never delete the SQLite database to fix Chroma.** Back up `data/tasks.sqlite3` while Streamlit is stopped before manual maintenance; preserve the SQLite journal/WAL files too if you back it up while it is in use.
-
 ## Troubleshooting
 
-| Symptom | Check / action |
-| --- | --- |
-| `ModuleNotFoundError` | Activate `.venv`, ensure VS Code interpreter matches, reinstall `requirements.txt`. |
-| AI chat disabled | Set the selected provider's key and restart; SQLite task list is still readable. |
-| Provider/model error | Verify matching `LLM_PROVIDER`, `LLM_MODEL`, correct project API key, available model, and account limits; click **Retry AI workflow** after correcting setup. |
-| Chroma startup fails | Check embedding weights/network, local permissions and `data/chroma` path; click **Retry index initialization**. |
-| Task saved but search missing it | SQLite committed; reconcile the index with the command above. |
-| Unexpected task choice | Use a task ID or complete exact title; ambiguous mutations must ask for clarification. |
-| Invalid date | Supply `YYYY-MM-DD` when prompted. |
-| Old conversation is gone | Expected after full reload/restart: task data remains in SQLite, chat context is session-scoped. |
-| Retry after uncertain failure | Check SQLite and the visible task list first; a write may have committed before an index/network error. |
-| Same chat submission retried | Streamlit uses a submission ID and SQLite receipts to avoid duplicate batch writes. A **new** deliberately repeated message is a new request. |
+- **`ModuleNotFoundError`:** activate `.venv` and reinstall with `python -m pip install -r requirements.txt`.
+- **AI chat disabled:** add the selected provider's key, check the provider/model pair, and restart Streamlit.
+- **Provider/model error:** verify model access, connectivity, quota, and billing.
+- **ChromaDB fails to initialize:** check directory permissions and internet access for the first embedding download; then use **Retry index initialization** in the UI.
+- **Task saved but search misses it:** check the task board, then run the reconciliation command above; SQLite may have committed before index synchronization failed.
+- **Chat history disappears after reload:** expected; tasks persist, but conversation and clarification state are held in memory.
 
-## Scope and limitations
-
-This is a local **single-user** application. It has no login, authorization, tenant separation, encrypted storage, cloud backups or public deployment hardening. The semantic index may need first-run model download; relevance depends on embeddings. LangGraph checkpoints are in memory, so clarification conversations are not durable across restarts. The natural-language parser supports a finite set of task operations and date forms; pronoun references such as `finish that` are not yet a general conversation memory feature. Concurrent processes can race on Chroma index writes, so use a single Streamlit server process for this prototype. Idempotency receipts accumulate with task history and may need a controlled retention policy later. Provider behavior depends on model capabilities, API access, quotas and connectivity.
-
-**Possible improvements:** durable LangGraph checkpoints, opt-in task previews for risky batch changes, configurable top-k/relevance diagnostics, background index-sync worker with concurrency locking, task search UI, accessibility/e2e browser testing, backups, authentication and multi-user partitioning.
-
-## Project layout
+## Project structure
 
 ```text
-app.py                        # Streamlit chat/task board
-demo_agent.py                 # Interactive CLI for real provider testing
-demo_data_layer.py            # Direct data-layer demo
-task_manager/config.py        # Environment settings
-task_manager/models.py        # Validated task types
-task_manager/agent_models.py  # Allowlisted action schemas
-task_manager/agent.py         # Provider adapters and LLM planner
-task_manager/graph.py         # LangGraph flow and clarification
-task_manager/database.py      # SQLite CRUD, transactions and receipts
-task_manager/task_service.py  # Authoritative operations and index sync
-task_manager/vector_store.py  # ChromaDB search and repair
-tests/                       # Automated reliability tests
-docs/VERIFICATION.md          # Manual provider/UI smoke checklist
+app.py
+.streamlit/config.toml         # UI theme
+.env.example                   # Safe configuration template
+requirements.txt               # Python dependencies
+PROJECT_SPEC.md                # Design and implementation history
+project_reader.txt             # Exports source files to one text file
+demo_agent.py                  # Optional CLI using a real LLM provider
+demo_data_layer.py             # Optional demo that writes sample tasks
+task_manager/
+  config.py                    # Environment settings
+  models.py                    # Task models and ID validation
+  agent_models.py              # Structured action schemas
+  agent.py                     # LLM adapters and planner
+  graph.py                     # LangGraph workflow
+  intent_resolution.py         # Request/target resolution
+  database.py                  # SQLite persistence
+  task_service.py              # Task operations and index sync
+  vector_store.py              # ChromaDB semantic search
+tests/                         # Automated unit and integration tests
 ```
 
-See `PROJECT_SPEC.md` for the design invariants, implementation progress and development history.
+## Limitations
+
+This is a local, single-user prototype with no authentication, role separation, encryption, cloud backups, or production deployment safeguards. Chat history and clarification checkpoints are in memory, and concurrent app processes are not coordinated for ChromaDB writes. Run one Streamlit process and do not expose the app publicly without adding appropriate security and operational controls.
