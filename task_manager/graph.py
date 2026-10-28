@@ -16,6 +16,7 @@ from .models import Status
 from .intent_resolution import (
     is_cancel_request, is_new_instruction, is_simple_list_request,
     is_unqualified_delete_request, partial_title_matches,
+    title_search_query,
 )
 from .task_service import BatchSyncError, TaskService
 
@@ -429,6 +430,30 @@ def build_agent_graph(
             }
         
         try:
+            title_query = title_search_query(request)
+            if title_query is not None:
+                matches = [
+                    task for task in service.all_tasks()
+                    if title_query.casefold() in task.title.casefold()
+                ]
+                return {
+                    "plan": None,
+                    "pending_clarification": None,
+                    "resolved_targets": {},
+                    "target_versions": {},
+                    "validation_errors": [],
+                    "execution_results": [{
+                        "kind": "title_search",
+                        "query": title_query,
+                        "tasks": [
+                            task.model_dump(mode="json")
+                            for task in matches
+                        ],
+                    }],
+                    "route": "respond",
+                    "response": "",
+                }
+
             # Unfiltered task-list commands are deterministic and do not
             # require an LLM call, even after a pending clarification.
             if is_simple_list_request(request):
@@ -909,10 +934,17 @@ def build_agent_graph(
                     f"({task['status']}, {task['priority']})."
                 )
 
-            elif kind in {"list", "search"}:
+            elif kind in {"list", "search", "title_search"}:
                 tasks = result["tasks"]
 
                 if not tasks:
+                    if kind == "title_search":
+                        messages.append(
+                            "No task titles contain "
+                            f"'{result['query']}'."
+                        )
+                        continue
+
                     label = (
                         "semantic candidates"
                         if kind == "search"
@@ -926,7 +958,11 @@ def build_agent_graph(
                 heading = (
                     "Ranked semantic candidates"
                     if kind == "search"
-                    else "Task list"
+                    else (
+                        "Title matches"
+                        if kind == "title_search"
+                        else "Task list"
+                    )
                 )
 
                 lines = [

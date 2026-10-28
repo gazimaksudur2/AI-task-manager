@@ -461,3 +461,24 @@ def test_unqualified_delete_does_not_delete_task_changed_after_prompt(service):
 
     assert "deleted or changed" in result["response"]
     assert service.get_task(task.id).title == "Updated project demo"
+
+
+def test_title_search_lists_all_literal_title_matches_without_planner(service):
+    first = service.create_task(title="Hangout with Tanvir")
+    second = service.create_task(title="Plan a weekend hangout")
+    service.create_task(title="Prepare project demo")
+    planner = RequestPlanner({})
+    graph = build_agent_graph(service, planner=planner)
+
+    result = answer(
+        graph,
+        "find task that have hangout on its title",
+        "literal-title-search",
+        "message-1",
+    )
+
+    assert "Title matches (2)" in result["response"]
+    assert first.title in result["response"]
+    assert second.title in result["response"]
+    assert "Prepare project demo" not in result["response"]
+    assert planner.calls == []

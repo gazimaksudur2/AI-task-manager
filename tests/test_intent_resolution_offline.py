@@ -10,6 +10,7 @@ from task_manager.intent_resolution import (
     is_simple_list_request,
     is_unqualified_delete_request,
     partial_title_matches,
+    title_search_query,
 )
 
 
@@ -50,6 +51,15 @@ def test_unqualified_delete_requests_need_a_task_choice(text):
 ])
 def test_targeted_deletes_are_not_unqualified(text):
     assert not is_unqualified_delete_request(text)
+
+
+@pytest.mark.parametrize("text", [
+    "find task that have hangout on its title",
+    "find tasks that have hangout in their title",
+    "show tasks with hangout in the title",
+])
+def test_title_search_extracts_literal_query(text):
+    assert title_search_query(text) == "hangout"
 
 
 @pytest.mark.parametrize("text", [
